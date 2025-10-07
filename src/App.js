@@ -4,7 +4,6 @@ import { motion, AnimatePresence } from "framer-motion";
 const API_BASE = "http://localhost:5000/api"; // thay nếu backend khác
 const TASKS_ENDPOINT = `${API_BASE}/tasks`;
 
-// helper: get auth headers if token exists
 function authHeaders() {
   const token = localStorage.getItem("auth_token");
   return token ? { Authorization: `Bearer ${token}` } : {};
@@ -28,7 +27,6 @@ export default function App() {
   const [input, setInput] = useState("");
   const [filter, setFilter] = useState("all");
   const [dark, setDark] = useState(() => {
-    // priority: saved choice > system preference (prefers-color-scheme)
     const saved = localStorage.getItem("todo_theme_v1");
     if (saved) return saved === "dark";
     return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -36,18 +34,15 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // apply theme class and persist
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
     localStorage.setItem("todo_theme_v1", dark ? "dark" : "light");
   }, [dark]);
 
-  // persist tasks to localStorage
   useEffect(() => {
     localStorage.setItem("todo_tasks_v1", JSON.stringify(tasks));
   }, [tasks]);
 
-  // fetch tasks from server on mount - fallback to localStorage data if network fails
   useEffect(() => {
     let mounted = true;
     setLoading(true);
@@ -58,8 +53,6 @@ export default function App() {
       })
       .then((data) => {
         if (!mounted) return;
-        // server data expected array of tasks, transform if necessary
-        // tasks might have _id field (Mongo) or id (other). Normalize to id.
         const normalized = data.map((t) => ({
           id: t._id || t.id || Date.now() + Math.random(),
           text: t.text || t.title || "",
@@ -70,7 +63,6 @@ export default function App() {
         setError(null);
       })
       .catch((err) => {
-        // network error or backend no auth -> keep local tasks
         console.warn("Fetch tasks failed:", err);
         setError("Không thể kết nối server — đang dùng dữ liệu local");
       })
@@ -81,17 +73,14 @@ export default function App() {
     return () => { mounted = false; };
   }, []);
 
-  // helper to call backend (post/put/delete). If request fails, update local state only.
   async function callApi(path, opts = {}) {
     const headers = { "Content-Type": "application/json", ...authHeaders(), ...(opts.headers || {}) };
     try {
       const res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
       if (!res.ok) {
-        // return body text for debugging
         const text = await res.text();
         throw new Error(`API ${res.status}: ${text}`);
       }
-      // try parse json, some endpoints may return empty body
       try {
         return await res.json();
       } catch {
@@ -99,71 +88,123 @@ export default function App() {
       }
     } catch (err) {
       console.warn("API call failed:", err);
-      // bubble error up
       throw err;
     }
   }
 
+// helper: extract server id from possible shapes of response
+function extractIdFromServerResp(res) {
+  if (!res) return null;
+  // if server returns directly the id string
+  if (typeof res === "string") return res;
+  // common fields
+  if (res._id) {
+    // sometimes _id is string
+    if (typeof res._id === "string") return res._id;
+    // sometimes _id is an object like { "$oid": "..." } or { "Hex": "..." }
+    if (res._id.$oid) return res._id.$oid;
+    if (res._id.Hex) return res._id.Hex;
+  }
+  if (res.insertedId) return res.insertedId;
+  if (res.insertedID) return res.insertedID;
+  if (res.inserted_id) return res.inserted_id;
+  // fallback try to find any string-looking property
+  for (const k of Object.keys(res)) {
+    if (typeof res[k] === "string" && /^[a-fA-F0-9]{12,24}$/.test(res[k])) return res[k];
+  }
+  return null;
+}
+
+// check basic Mongo ObjectID hex format (24 hex chars)
+function isValidObjectId(id) {
+  return typeof id === "string" && /^[a-fA-F0-9]{24}$/.test(id);
+}
   // Add
   const addTask = async () => {
-    const trimmed = input.trim();
-    if (!trimmed) return;
-    // optimistic id
-    const optimistic = {
-      id: `local-${Date.now()}`,
-      text: trimmed,
-      completed: false,
-      createdAt: Date.now(),
-    };
-    setTasks((prev) => [optimistic, ...prev]);
-    setInput("");
-    // try post to server
-    try {
-      const payload = { text: trimmed };
-      const serverRes = await callApi("/tasks", {
-        method: "POST",
-        body: JSON.stringify(payload),
-      });
-      if (serverRes) {
-        // serverRes may be inserted doc or {insertedId...}
-        // if server returns _id or id, replace optimistic
-        const serverId = serverRes._id || (serverRes.insertedId ? serverRes.insertedId : null);
-        setTasks((prev) =>
-          prev.map((t) =>
-            t.id === optimistic.id ? { ...t, id: serverId || t.id } : t
-          )
-        );
-      }
-    } catch (err) {
-      // keep optimistic local, show error
-      setError("Không lưu được lên server — lưu tạm local.");
-    }
+  const trimmed = input.trim();
+  if (!trimmed) return;
+  const optimistic = {
+    id: `local-${Date.now()}`,
+    text: trimmed,
+    completed: false,
+    createdAt: Date.now(),
   };
+  setTasks((prev) => [optimistic, ...prev]);
+  setInput("");
+  try {
+    const payload = { text: trimmed };
+    const serverRes = await callApi("/tasks", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    // extract id robustly
+    const serverId = extractIdFromServerResp(serverRes);
+    if (serverId) {
+      setTasks((prev) =>
+        prev.map((t) =>
+          t.id === optimistic.id ? { ...t, id: serverId } : t
+        )
+      );
+    } else {
+      // server didn't return id string — keep optimistic id and warn
+      console.warn("Server returned no usable id for POST:", serverRes);
+    }
+  } catch (err) {
+    setError("Không lưu được lên server — lưu tạm local.");
+    console.warn("POST failed:", err);
+  }
+};
 
-  // Toggle complete
-  const toggleComplete = async (id) => {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)));
-    // try update backend
-    try {
-      await callApi(`/tasks/${id}`, {
-        method: "PUT",
-        body: JSON.stringify({ completed: !tasks.find((t) => t.id === id)?.completed }),
-      });
-    } catch (err) {
-      setError("Không cập nhật trạng thái trên server.");
-    }
-  };
+
+const toggleComplete = async (id) => {
+  // debug log
+  if (!id) {
+    console.warn("toggleComplete called with invalid id:", id);
+    setError("Không xác định được task id (bỏ qua).");
+    return;
+  }
+
+  // find task snapshot
+  const currentTask = tasks.find((t) => t.id === id);
+  if (!currentTask) {
+    console.warn("toggleComplete: task not found in state for id:", id);
+    return;
+  }
+
+  const updatedCompleted = !currentTask.completed;
+
+  // optimistic update UI
+  setTasks((prev) =>
+    prev.map((t) => (t.id === id ? { ...t, completed: updatedCompleted } : t))
+  );
+
+  // If id is an optimistic local id (not sent to server yet), skip API call
+  if (String(id).startsWith("local-") || !isValidObjectId(id)) {
+    console.info("toggleComplete: skipping server update for local/invalid id:", id);
+    // optionally queue sync logic here
+    return;
+  }
+
+  try {
+    await callApi(`/tasks/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      body: JSON.stringify({ completed: updatedCompleted }),
+    });
+  } catch (err) {
+    setError("Không cập nhật trạng thái trên server.");
+    console.warn("API call failed in toggleComplete:", err);
+    // optional: rollback UI change or mark sync-needed
+  }
+};
 
   // Delete
   const deleteTask = async (id) => {
-    // optimistic remove
     const before = tasks;
     setTasks((prev) => prev.filter((t) => t.id !== id));
     try {
       await callApi(`/tasks/${id}`, { method: "DELETE" });
     } catch (err) {
       setError("Không xóa được trên server.");
-      // rollback
       setTasks(before);
     }
   };
@@ -184,7 +225,6 @@ export default function App() {
   const clearCompleted = async () => {
     const remaining = tasks.filter((t) => !t.completed);
     setTasks(remaining);
-    // if backend supports bulk delete, implement here; else delete one-by-one
     try {
       const completed = tasks.filter((t) => t.completed);
       await Promise.all(completed.map((c) => callApi(`/tasks/${c.id}`, { method: "DELETE" })));
