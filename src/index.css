@@ -1,3 +1,6 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 body {
   margin: 0;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
@@ -10,4 +13,45 @@ body {
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
+}
+
+:root {
+  --bg: #e0e5ec;
+  --surface: #e0e5ec;
+  --text: #222;
+  --muted: #666;
+  --shadow1: 6px 6px 12px #a3b1c6;
+  --shadow2: -6px -6px 12px #ffffff;
+  --accent: #007bff;
+}
+
+.dark {
+  --bg: #1a1a1a;
+  --surface: #222;
+  --text: #f5f5f5;
+  --muted: #aaa;
+  --shadow1: 6px 6px 12px #0e0e0e;
+  --shadow2: -6px -6px 12px #2a2a2a;
+  --accent: #4f8cff;
+}
+
+/* neumorphism style helpers */
+.neu {
+  background: var(--surface);
+  box-shadow: var(--shadow1), var(--shadow2);
+  border-radius: 16px;
+}
+.neu-btn {
+  background: var(--surface);
+  box-shadow: var(--shadow1), var(--shadow2);
+  border-radius: 12px;
+  transition: all 0.2s ease;
+}
+.neu-btn:active {
+  box-shadow: inset var(--shadow1), inset var(--shadow2);
+}
+.neu-inset {
+  background: var(--surface);
+  box-shadow: inset var(--shadow1), inset var(--shadow2);
+  border-radius: 12px;
 }
